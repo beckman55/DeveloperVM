@@ -1,0 +1,44 @@
+---
+# Bitwarden CLI installation role
+
+- name: Check if Bitwarden CLI is installed
+  ansible.builtin.command: bw --version
+  register: bw_check
+  changed_when: false
+  failed_when: false
+
+- name: Download Bitwarden CLI
+  ansible.builtin.get_url:
+    url: "https://vault.bitwarden.com/download/?app=cli&platform=linux"
+    dest: /tmp/bw-cli.zip
+    mode: '0644'
+  when: bw_check.rc != 0
+
+- name: Extract Bitwarden CLI
+  ansible.builtin.unarchive:
+    src: /tmp/bw-cli.zip
+    dest: /usr/local/bin
+    remote_src: true
+    mode: '0755'
+  when: bw_check.rc != 0
+
+- name: Ensure bw is executable
+  ansible.builtin.file:
+    path: /usr/local/bin/bw
+    mode: '0755'
+  when: bw_check.rc != 0
+
+- name: Cleanup download
+  ansible.builtin.file:
+    path: /tmp/bw-cli.zip
+    state: absent
+  when: bw_check.rc != 0
+
+- name: Verify Bitwarden CLI installation
+  ansible.builtin.command: bw --version
+  register: bw_version
+  changed_when: false
+
+- name: Display Bitwarden CLI version
+  ansible.builtin.debug:
+    msg: "Bitwarden CLI version: {{ bw_version.stdout }}"

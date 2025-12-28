@@ -1,0 +1,59 @@
+---
+# Claude Code CLI installation role
+# Installation method is parameterized - update claude_code_install_method in group_vars
+
+- name: Install Claude Code CLI via npm (default method)
+  when: claude_code_install_method == 'npm'
+  block:
+    - name: Install Claude Code CLI globally via npm
+      ansible.builtin.command: npm install -g {{ claude_code_npm_package }}
+      args:
+        creates: /usr/lib/node_modules/@anthropic-ai/claude-code
+      register: npm_install_result
+
+    - name: Verify Claude Code CLI installation
+      ansible.builtin.command: claude --version
+      register: claude_version
+      changed_when: false
+      failed_when: false
+
+    - name: Display Claude Code CLI version
+      ansible.builtin.debug:
+        msg: "Claude Code CLI: {{ claude_version.stdout | default('installed but version check failed') }}"
+
+- name: Alternative installation via npx (if npm global fails)
+  when: claude_code_install_method == 'npx'
+  block:
+    - name: Create wrapper script for npx-based Claude Code
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          exec npx {{ claude_code_npm_package }} "$@"
+        dest: /usr/local/bin/claude
+        mode: '0755'
+
+# Note: If installation method changes (e.g., direct binary, pip, etc.),
+# add additional blocks here with appropriate conditions.
+# The claude_code_install_method variable can be set to switch methods.
+
+- name: Ensure Claude Code works for dev user
+  ansible.builtin.command: claude --help
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin:{{ dev_user_home }}/.local/bin"
+  register: claude_help
+  changed_when: false
+  failed_when: false
+
+- name: Report Claude Code installation status
+  ansible.builtin.debug:
+    msg: |
+      Claude Code CLI installation status:
+      - Method: {{ claude_code_install_method }}
+      - Package: {{ claude_code_npm_package }}
+      - Working: {{ 'Yes' if claude_help.rc == 0 else 'No - may require manual setup' }}
+
+      Note: Claude Code requires an API key to function.
+      Configure during onboarding or set ANTHROPIC_API_KEY environment variable.

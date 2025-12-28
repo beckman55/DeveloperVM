@@ -1,0 +1,550 @@
+#!/bin/bash
+#
+# DevVM Onboarding Wizard
+# Guides users through initial configuration of their development environment
+#
+# Usage:
+#   devvm-onboarding          # GUI mode
+#   devvm-onboarding --cli    # CLI interactive mode
+#   devvm-onboarding --silent # Non-interactive mode (uses defaults/skips)
+#
+
+set -e
+
+TITLE="DevVM Onboarding"
+STATE_DIR="$HOME/.local/share/devvm-onboarding"
+STATE_FILE="$STATE_DIR/state.json"
+
+# Parse arguments
+CLI_MODE=false
+SILENT_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --cli)
+            CLI_MODE=true
+            shift
+            ;;
+        --silent)
+            SILENT_MODE=true
+            CLI_MODE=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Ensure state directory exists
+mkdir -p "$STATE_DIR"
+
+# Initialize state file if it doesn't exist
+if [[ ! -f "$STATE_FILE" ]]; then
+    cat > "$STATE_FILE" << 'EOF'
+{
+  "completed": false,
+  "steps": {
+    "git_identity": false,
+    "github_auth": false,
+    "ssh_setup": false,
+    "vscode_sync": false,
+    "bitwarden": false,
+    "api_keys": false,
+    "docker_verify": false
+  },
+  "last_run": null
+}
+EOF
+fi
+
+# Update state
+update_state() {
+    local step="$1"
+    local value="$2"
+    jq --arg step "$step" --argjson value "$value" \
+       '.steps[$step] = $value | .last_run = now | .last_run |= todate' \
+       "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+}
+
+mark_complete() {
+    jq '.completed = true | .last_run = now | .last_run |= todate' \
+       "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+}
+
+get_step_status() {
+    local step="$1"
+    jq -r ".steps.$step // false" "$STATE_FILE"
+}
+
+# Check for zenity or yad (GUI mode)
+if [[ "$CLI_MODE" == "false" ]]; then
+    if command -v yad >/dev/null 2>&1; then
+        DIALOG_CMD="yad"
+    elif command -v zenity >/dev/null 2>&1; then
+        DIALOG_CMD="zenity"
+    else
+        echo "No GUI dialog tool found, falling back to CLI mode"
+        CLI_MODE=true
+    fi
+fi
+
+# GUI helpers
+gui_message() {
+    local msg="$1"
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" --text="$msg" --button="OK:0" --width=500
+    else
+        zenity --info --title="$TITLE" --text="$msg" --width=500
+    fi
+}
+
+gui_question() {
+    local msg="$1"
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" --text="$msg" --button="Skip:1" --button="Continue:0" --width=500
+    else
+        zenity --question --title="$TITLE" --text="$msg" --ok-label="Continue" --cancel-label="Skip" --width=500
+    fi
+}
+
+gui_entry() {
+    local msg="$1"
+    local default="$2"
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" --entry --text="$msg" --entry-text="$default" --width=400
+    else
+        zenity --entry --title="$TITLE" --text="$msg" --entry-text="$default" --width=400
+    fi
+}
+
+gui_form() {
+    local title="$1"
+    local field1_label="$2"
+    local field1_default="$3"
+    local field2_label="$4"
+    local field2_default="$5"
+
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$title" --form \
+            --field="$field1_label" "$field1_default" \
+            --field="$field2_label" "$field2_default" \
+            --width=400 --separator="|"
+    else
+        # Zenity doesn't have form, so use two entries
+        local val1 val2
+        val1=$(zenity --entry --title="$title" --text="$field1_label" --entry-text="$field1_default" --width=400)
+        val2=$(zenity --entry --title="$title" --text="$field2_label" --entry-text="$field2_default" --width=400)
+        echo "${val1}|${val2}"
+    fi
+}
+
+# CLI helpers
+cli_prompt() {
+    local msg="$1"
+    local default="$2"
+    read -rp "$msg [$default]: " response
+    echo "${response:-$default}"
+}
+
+cli_confirm() {
+    local msg="$1"
+    read -rp "$msg [y/N]: " response
+    [[ "$response" =~ ^[Yy] ]]
+}
+
+# Step implementations
+step_git_identity() {
+    echo "=== Git Identity Setup ==="
+
+    local current_name current_email
+    current_name=$(git config --global user.name 2>/dev/null || echo "")
+    current_email=$(git config --global user.email 2>/dev/null || echo "")
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        if [[ -n "$current_name" && -n "$current_email" ]]; then
+            echo "Git identity already configured: $current_name <$current_email>"
+            update_state "git_identity" true
+        else
+            echo "Skipping git identity (not configured, silent mode)"
+        fi
+        return 0
+    fi
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        echo "Current git config:"
+        echo "  Name: ${current_name:-<not set>}"
+        echo "  Email: ${current_email:-<not set>}"
+        echo ""
+
+        if cli_confirm "Configure git identity?"; then
+            local name email
+            name=$(cli_prompt "Your name" "$current_name")
+            email=$(cli_prompt "Your email" "$current_email")
+
+            git config --global user.name "$name"
+            git config --global user.email "$email"
+            echo "Git identity configured!"
+            update_state "git_identity" true
+        else
+            echo "Skipped git identity setup"
+        fi
+    else
+        if ! gui_question "Configure your Git identity?\n\nCurrent:\nName: ${current_name:-<not set>}\nEmail: ${current_email:-<not set>}"; then
+            return 0
+        fi
+
+        local result
+        result=$(gui_form "Git Identity" "Name:" "$current_name" "Email:" "$current_email")
+        if [[ -n "$result" ]]; then
+            local name email
+            name=$(echo "$result" | cut -d'|' -f1)
+            email=$(echo "$result" | cut -d'|' -f2)
+            git config --global user.name "$name"
+            git config --global user.email "$email"
+            gui_message "Git identity configured!\n\nName: $name\nEmail: $email"
+            update_state "git_identity" true
+        fi
+    fi
+}
+
+step_github_auth() {
+    echo "=== GitHub Authentication ==="
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        echo "Skipping GitHub auth (requires interaction)"
+        return 0
+    fi
+
+    # Check if already authenticated
+    if gh auth status &>/dev/null; then
+        local user
+        user=$(gh api user --jq '.login' 2>/dev/null || echo "unknown")
+        if [[ "$CLI_MODE" == "true" ]]; then
+            echo "Already authenticated to GitHub as: $user"
+            update_state "github_auth" true
+        else
+            gui_message "Already authenticated to GitHub as: $user"
+            update_state "github_auth" true
+        fi
+        return 0
+    fi
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        if cli_confirm "Authenticate with GitHub?"; then
+            echo "Starting GitHub authentication (device flow)..."
+            gh auth login --web
+            update_state "github_auth" true
+        else
+            echo "Skipped GitHub authentication"
+        fi
+    else
+        if gui_question "Authenticate with GitHub?\n\nThis will open a browser for device authentication."; then
+            # Open terminal for gh auth
+            if command -v gnome-terminal >/dev/null 2>&1; then
+                gnome-terminal -- bash -c "gh auth login --web; echo 'Press Enter to close'; read"
+            elif command -v xterm >/dev/null 2>&1; then
+                xterm -e "gh auth login --web; echo 'Press Enter to close'; read"
+            else
+                gh auth login --web
+            fi
+            gui_message "GitHub authentication complete!"
+            update_state "github_auth" true
+        fi
+    fi
+}
+
+step_ssh_setup() {
+    echo "=== SSH Key Setup ==="
+
+    local ssh_key="$HOME/.ssh/id_ed25519"
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        if [[ -f "$ssh_key" ]]; then
+            echo "SSH key already exists: $ssh_key"
+            update_state "ssh_setup" true
+        else
+            echo "Generating SSH key in silent mode..."
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+            ssh-keygen -t ed25519 -f "$ssh_key" -N "" -C "$(whoami)@$(hostname)"
+            update_state "ssh_setup" true
+        fi
+        return 0
+    fi
+
+    if [[ -f "$ssh_key" ]]; then
+        if [[ "$CLI_MODE" == "true" ]]; then
+            echo "SSH key already exists: $ssh_key"
+            if cli_confirm "Add key to GitHub?"; then
+                gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)"
+                echo "SSH key added to GitHub!"
+            fi
+            update_state "ssh_setup" true
+        else
+            if gui_question "SSH key already exists.\n\nAdd it to your GitHub account?"; then
+                gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)" 2>/dev/null || true
+                gui_message "SSH key added to GitHub!"
+            fi
+            update_state "ssh_setup" true
+        fi
+    else
+        if [[ "$CLI_MODE" == "true" ]]; then
+            if cli_confirm "Generate new SSH key?"; then
+                local email
+                email=$(git config --global user.email 2>/dev/null || echo "")
+                email=$(cli_prompt "Email for SSH key" "$email")
+
+                mkdir -p "$HOME/.ssh"
+                chmod 700 "$HOME/.ssh"
+                ssh-keygen -t ed25519 -f "$ssh_key" -C "$email"
+
+                # Start ssh-agent and add key
+                eval "$(ssh-agent -s)"
+                ssh-add "$ssh_key"
+
+                # Add github.com to known_hosts
+                ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+                if cli_confirm "Add key to GitHub?"; then
+                    gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)"
+                fi
+                update_state "ssh_setup" true
+            fi
+        else
+            if gui_question "Generate a new SSH key?\n\nThis will create an ed25519 key for secure authentication."; then
+                local email
+                email=$(git config --global user.email 2>/dev/null || echo "")
+                email=$(gui_entry "Email for SSH key:" "$email")
+
+                mkdir -p "$HOME/.ssh"
+                chmod 700 "$HOME/.ssh"
+                ssh-keygen -t ed25519 -f "$ssh_key" -N "" -C "$email"
+
+                eval "$(ssh-agent -s)"
+                ssh-add "$ssh_key"
+                ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+                if gui_question "Add key to your GitHub account?"; then
+                    gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)" 2>/dev/null || true
+                fi
+                gui_message "SSH key generated and configured!"
+                update_state "ssh_setup" true
+            fi
+        fi
+    fi
+}
+
+step_vscode_sync() {
+    echo "=== VS Code Settings Sync ==="
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        echo "Skipping VS Code sync (requires interaction)"
+        return 0
+    fi
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        echo "VS Code Settings Sync allows you to sync your settings across devices."
+        if cli_confirm "Open VS Code to configure Settings Sync?"; then
+            code &
+            echo "VS Code opened. Go to: File > Preferences > Settings Sync"
+            echo "Sign in with GitHub or Microsoft account."
+            cli_confirm "Press Enter when done..."
+            update_state "vscode_sync" true
+        fi
+    else
+        if gui_question "Configure VS Code Settings Sync?\n\nThis will open VS Code where you can sign in to sync your settings."; then
+            code &
+            gui_message "VS Code opened.\n\nGo to: File > Preferences > Settings Sync\n\nSign in with your GitHub or Microsoft account."
+            update_state "vscode_sync" true
+        fi
+    fi
+}
+
+step_bitwarden() {
+    echo "=== Bitwarden Setup ==="
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        echo "Skipping Bitwarden setup (requires interaction)"
+        return 0
+    fi
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        echo "Bitwarden CLI can be used to securely access your passwords."
+        if cli_confirm "Login to Bitwarden?"; then
+            bw login
+            echo ""
+            echo "To unlock your vault, run: bw unlock"
+            echo "Then export BW_SESSION to your environment."
+            update_state "bitwarden" true
+        fi
+    else
+        if gui_question "Configure Bitwarden CLI?\n\nThis allows secure access to your password vault from the terminal."; then
+            if command -v gnome-terminal >/dev/null 2>&1; then
+                gnome-terminal -- bash -c "bw login; echo ''; echo 'To unlock: bw unlock'; echo 'Then export BW_SESSION'; echo ''; echo 'Press Enter to close'; read"
+            elif command -v xterm >/dev/null 2>&1; then
+                xterm -e "bw login; echo ''; echo 'To unlock: bw unlock'; echo 'Press Enter to close'; read"
+            fi
+            gui_message "Bitwarden configured!\n\nTo unlock your vault:\n  bw unlock\n\nThen export the BW_SESSION variable."
+            update_state "bitwarden" true
+        fi
+    fi
+}
+
+step_api_keys() {
+    echo "=== API Keys Setup ==="
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        echo "Skipping API keys setup (requires interaction)"
+        return 0
+    fi
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        echo "Claude Code requires an ANTHROPIC_API_KEY to function."
+        echo ""
+        echo "Get your API key from: https://console.anthropic.com/settings/keys"
+        echo ""
+        echo "Recommended: Store your API key in Bitwarden and use direnv"
+        echo "to load it per-project with a .envrc file."
+        echo ""
+        if cli_confirm "Open API key pages in browser?"; then
+            xdg-open "https://console.anthropic.com/settings/keys" 2>/dev/null || echo "Open: https://console.anthropic.com/settings/keys"
+            xdg-open "https://platform.openai.com/api-keys" 2>/dev/null || echo "Open: https://platform.openai.com/api-keys"
+        fi
+
+        if cli_confirm "Create a template .envrc file in your home directory?"; then
+            cat > "$HOME/.envrc.template" << 'ENVRC'
+# API Keys - Copy this to your project directory as .envrc
+# Then run: direnv allow
+
+# Anthropic (Claude)
+export ANTHROPIC_API_KEY="your-anthropic-key-here"
+
+# OpenAI (optional)
+# export OPENAI_API_KEY="your-openai-key-here"
+ENVRC
+            echo "Template created: $HOME/.envrc.template"
+            echo "Copy to project directories and edit with your keys."
+        fi
+        update_state "api_keys" true
+    else
+        if gui_question "Configure API Keys?\n\nClaude Code requires an ANTHROPIC_API_KEY.\n\nWe'll open the API key pages and create a template .envrc file."; then
+            xdg-open "https://console.anthropic.com/settings/keys" 2>/dev/null || true
+            xdg-open "https://platform.openai.com/api-keys" 2>/dev/null || true
+
+            cat > "$HOME/.envrc.template" << 'ENVRC'
+# API Keys - Copy this to your project directory as .envrc
+# Then run: direnv allow
+
+# Anthropic (Claude)
+export ANTHROPIC_API_KEY="your-anthropic-key-here"
+
+# OpenAI (optional)
+# export OPENAI_API_KEY="your-openai-key-here"
+ENVRC
+
+            gui_message "API key pages opened in browser.\n\nTemplate created: ~/.envrc.template\n\nCopy to project directories and add your keys.\nRun 'direnv allow' to enable."
+            update_state "api_keys" true
+        fi
+    fi
+}
+
+step_docker_verify() {
+    echo "=== Docker Verification ==="
+
+    if [[ "$SILENT_MODE" == "true" ]]; then
+        if docker run --rm hello-world &>/dev/null; then
+            echo "Docker is working!"
+            update_state "docker_verify" true
+        else
+            echo "Docker test failed - may need to log out and back in"
+        fi
+        return 0
+    fi
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        echo "Testing Docker..."
+        if docker run --rm hello-world; then
+            echo "Docker is working!"
+            update_state "docker_verify" true
+        else
+            echo ""
+            echo "Docker test failed. This is usually because group membership"
+            echo "hasn't taken effect yet. Try logging out and back in."
+            echo ""
+            echo "Or run: newgrp docker"
+        fi
+    else
+        gui_message "Testing Docker...\n\nThis will run 'docker run hello-world'"
+        if docker run --rm hello-world &>/dev/null; then
+            gui_message "Docker is working correctly!"
+            update_state "docker_verify" true
+        else
+            gui_message "Docker test failed.\n\nThis usually means you need to log out and back in for group membership to take effect.\n\nAlternatively, run: newgrp docker"
+        fi
+    fi
+}
+
+show_summary() {
+    echo ""
+    echo "=== Onboarding Summary ==="
+    echo ""
+
+    local steps=(
+        "git_identity:Git Identity"
+        "github_auth:GitHub Auth"
+        "ssh_setup:SSH Setup"
+        "vscode_sync:VS Code Sync"
+        "bitwarden:Bitwarden"
+        "api_keys:API Keys"
+        "docker_verify:Docker"
+    )
+
+    for step_info in "${steps[@]}"; do
+        local key="${step_info%%:*}"
+        local label="${step_info#*:}"
+        local status
+        status=$(get_step_status "$key")
+        if [[ "$status" == "true" ]]; then
+            echo "  [x] $label"
+        else
+            echo "  [ ] $label"
+        fi
+    done
+
+    echo ""
+}
+
+main() {
+    echo "========================================"
+    echo "  DevVM Onboarding Wizard"
+    echo "========================================"
+    echo ""
+
+    if [[ "$CLI_MODE" == "false" ]]; then
+        gui_message "Welcome to DevVM Onboarding!\n\nThis wizard will help you configure your development environment.\n\nEach step can be skipped and run later."
+    fi
+
+    # Run each step
+    step_git_identity
+    step_github_auth
+    step_ssh_setup
+    step_vscode_sync
+    step_bitwarden
+    step_api_keys
+    step_docker_verify
+
+    # Mark as complete
+    mark_complete
+
+    show_summary
+
+    if [[ "$CLI_MODE" == "true" ]]; then
+        echo "Onboarding complete!"
+        echo "You can re-run any step by running: devvm-onboarding --cli"
+    else
+        gui_message "Onboarding complete!\n\nYou can re-run this wizard anytime from the Desktop shortcut or by running:\n\ndevvm-onboarding"
+    fi
+}
+
+main

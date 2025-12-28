@@ -1,0 +1,25 @@
+---
+# Locale configuration role
+
+- name: Ensure locales package is installed
+  ansible.builtin.apt:
+    name: locales
+    state: present
+
+- name: Generate locale
+  community.general.locale_gen:
+    name: "{{ locale }}"
+    state: present
+
+- name: Set default locale
+  ansible.builtin.copy:
+    content: |
+      LANG={{ locale }}
+      LC_ALL={{ locale }}
+    dest: /etc/default/locale
+    mode: '0644'
+  notify: Update locale
+
+- name: Configure timezone
+  community.general.timezone:
+    name: "{{ timezone }}"

@@ -1,0 +1,101 @@
+#!/bin/bash
+#
+# DevVM Wizard Selector
+# Runs at login to determine which wizard to launch
+#
+
+set -e
+
+STATE_FILE="/var/lib/devvm/state.json"
+DONE_FILE="/var/lib/devvm/provisioning.done"
+NEEDS_ATTENTION_FILE="/var/lib/devvm/provisioning.needs_attention"
+ONBOARDING_STATE="$HOME/.local/share/devvm-onboarding/state.json"
+
+# Wait for desktop to be ready
+sleep 3
+
+log() {
+    logger -t devvm-wizard-selector "$*"
+}
+
+check_critical_tools() {
+    local missing=()
+
+    command -v git >/dev/null 2>&1 || missing+=("git")
+    command -v code >/dev/null 2>&1 || missing+=("code")
+    command -v python3 >/dev/null 2>&1 || missing+=("python3")
+    command -v uv >/dev/null 2>&1 || missing+=("uv")
+    command -v claude >/dev/null 2>&1 || missing+=("claude")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log "Missing critical tools: ${missing[*]}"
+        return 1
+    fi
+
+    return 0
+}
+
+focus_window() {
+    local window_name="$1"
+    sleep 1
+    if command -v wmctrl >/dev/null 2>&1; then
+        wmctrl -a "$window_name" 2>/dev/null || true
+    fi
+}
+
+launch_finish_setup() {
+    log "Launching Finish Setup wizard"
+    /usr/local/bin/devvm-finish-setup &
+    focus_window "Finish Setup"
+}
+
+launch_onboarding() {
+    log "Launching Onboarding wizard"
+    /usr/local/bin/devvm-onboarding &
+    focus_window "Onboarding"
+}
+
+check_onboarding_complete() {
+    if [[ -f "$ONBOARDING_STATE" ]]; then
+        local complete
+        complete=$(jq -r '.completed // false' "$ONBOARDING_STATE" 2>/dev/null || echo "false")
+        if [[ "$complete" == "true" ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+main() {
+    log "DevVM Wizard Selector starting"
+
+    # Check if provisioning is still running
+    if [[ ! -f "$DONE_FILE" && ! -f "$NEEDS_ATTENTION_FILE" ]]; then
+        log "Provisioning still in progress, not launching wizard yet"
+        exit 0
+    fi
+
+    # Check if onboarding was already completed
+    if check_onboarding_complete; then
+        log "Onboarding already completed, exiting"
+        exit 0
+    fi
+
+    # Check if needs attention (provisioning failed)
+    if [[ -f "$NEEDS_ATTENTION_FILE" ]]; then
+        log "Provisioning needs attention, launching Finish Setup"
+        launch_finish_setup
+        exit 0
+    fi
+
+    # Check critical tools
+    if check_critical_tools; then
+        log "All critical tools present, launching Onboarding"
+        launch_onboarding
+    else
+        log "Critical tools missing, launching Finish Setup"
+        launch_finish_setup
+    fi
+}
+
+main "$@"

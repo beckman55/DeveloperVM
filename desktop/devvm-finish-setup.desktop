@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Finish Setup
+Comment=DevVM Finish Setup - Check and fix installation
+Exec=/usr/local/bin/devvm-finish-setup
+Icon=system-software-install
+Terminal=false
+Categories=Settings;System;
+Keywords=setup;install;fix;devvm;

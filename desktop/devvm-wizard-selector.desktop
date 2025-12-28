@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DevVM Wizard Selector
+Comment=Automatically select and launch the appropriate DevVM wizard
+Exec=/usr/local/bin/devvm-wizard-selector
+Icon=preferences-system
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Application

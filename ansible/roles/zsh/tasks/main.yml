@@ -1,0 +1,48 @@
+---
+# Zsh installation role (optional, controlled by enable_zsh)
+
+- name: Install zsh
+  ansible.builtin.apt:
+    name: zsh
+    state: present
+
+- name: Check if oh-my-zsh is installed
+  ansible.builtin.stat:
+    path: "{{ dev_user_home }}/.oh-my-zsh"
+  register: ohmyzsh
+
+- name: Install oh-my-zsh for dev user
+  ansible.builtin.shell: |
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+  args:
+    creates: "{{ dev_user_home }}/.oh-my-zsh"
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+  when: not ohmyzsh.stat.exists
+
+- name: Add direnv hook to zshrc
+  ansible.builtin.lineinfile:
+    path: "{{ dev_user_home }}/.zshrc"
+    line: 'eval "$(direnv hook zsh)"'
+    create: true
+    mode: '0644'
+  become: true
+  become_user: "{{ dev_username }}"
+
+- name: Add uv to PATH in zshrc
+  ansible.builtin.lineinfile:
+    path: "{{ dev_user_home }}/.zshrc"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    mode: '0644'
+  become: true
+  become_user: "{{ dev_username }}"
+
+# Note: Not changing default shell automatically - user can do this manually if desired
+- name: Display zsh info
+  ansible.builtin.debug:
+    msg: |
+      Zsh has been installed with oh-my-zsh.
+      To make zsh your default shell, run: chsh -s $(which zsh)

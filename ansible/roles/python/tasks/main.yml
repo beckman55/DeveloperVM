@@ -1,0 +1,57 @@
+---
+# Python and uv installation role
+
+- name: Install Python packages
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+    state: present
+
+- name: Install uv via official installer
+  ansible.builtin.shell: |
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    creates: /root/.local/bin/uv
+  environment:
+    HOME: /root
+
+- name: Create symlink for uv in /usr/local/bin
+  ansible.builtin.file:
+    src: /root/.local/bin/uv
+    dest: /usr/local/bin/uv
+    state: link
+  ignore_errors: true
+
+- name: Install uv for dev user
+  ansible.builtin.shell: |
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    creates: "{{ dev_user_home }}/.local/bin/uv"
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+
+- name: Ensure uv is in PATH for dev user
+  ansible.builtin.lineinfile:
+    path: "{{ dev_user_home }}/.bashrc"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    mode: '0644'
+  become: true
+  become_user: "{{ dev_username }}"
+
+- name: Verify uv installation
+  ansible.builtin.command: "{{ dev_user_home }}/.local/bin/uv --version"
+  register: uv_version
+  changed_when: false
+  become: true
+  become_user: "{{ dev_username }}"
+  ignore_errors: true
+
+- name: Display uv version
+  ansible.builtin.debug:
+    msg: "uv version: {{ uv_version.stdout | default('not installed') }}"

@@ -1,0 +1,9 @@
+“Follow BUILD_SPEC.md exactly.”
+“Open BUILD_SPEC.md and CLAUDE_TASK.md and generate the entire repo as files in-place.”
+
+
+
+Read BUILD_SPEC.md and CLAUDE_TASK.md in this repository.
+Treat BUILD_SPEC.md as authoritative.
+Generate the full repository contents exactly as specified.
+Write files directly into the repo.

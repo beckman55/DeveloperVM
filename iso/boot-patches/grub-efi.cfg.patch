@@ -1,0 +1,26 @@
+# EFI GRUB configuration patch for DevVM autoinstall
+# Applied to /boot/grub/grub.cfg on EFI systems
+
+set default=0
+set timeout=5
+
+# Primary autoinstall entry (default)
+menuentry "Install DevVM Ubuntu (Autoinstall)" --id devvm-autoinstall {
+    set gfxpayload=keep
+    linux   /casper/vmlinuz autoinstall ds=nocloud\;s=/cdrom/nocloud/ quiet ---
+    initrd  /casper/initrd
+}
+
+# Alternate seed path entry
+menuentry "Install DevVM Ubuntu (Alternate Seed Path)" --id devvm-autoinstall-alt {
+    set gfxpayload=keep
+    linux   /casper/vmlinuz autoinstall ds=nocloud\;s=/cdrom/autoinstall/nocloud/ quiet ---
+    initrd  /casper/initrd
+}
+
+# Manual recovery entry
+menuentry "Manual Install (Recovery)" --id devvm-manual {
+    set gfxpayload=keep
+    linux   /casper/vmlinuz boot=casper quiet splash ---
+    initrd  /casper/initrd
+}

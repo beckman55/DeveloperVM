@@ -1,0 +1,89 @@
+---
+# Desktop assets installation role
+
+- name: Ensure devvm share directory exists
+  ansible.builtin.file:
+    path: "{{ devvm_share_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy README to share directory
+  ansible.builtin.copy:
+    src: README-START-HERE.md
+    dest: "{{ devvm_share_dir }}/README-START-HERE.md"
+    mode: '0644'
+
+- name: Install onboarding script
+  ansible.builtin.copy:
+    src: devvm-onboarding
+    dest: /usr/local/bin/devvm-onboarding
+    mode: '0755'
+
+- name: Install finish-setup script
+  ansible.builtin.copy:
+    src: devvm-finish-setup
+    dest: /usr/local/bin/devvm-finish-setup
+    mode: '0755'
+
+- name: Install wizard selector script
+  ansible.builtin.copy:
+    src: devvm-wizard-selector
+    dest: /usr/local/bin/devvm-wizard-selector
+    mode: '0755'
+
+- name: Install desktop files to system applications
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/share/applications/{{ item }}"
+    mode: '0644'
+  loop:
+    - devvm-onboarding.desktop
+    - devvm-finish-setup.desktop
+    - devvm-view-log.desktop
+
+- name: Install autostart desktop file for wizard selector
+  ansible.builtin.copy:
+    src: devvm-wizard-selector.desktop
+    dest: /etc/xdg/autostart/devvm-wizard-selector.desktop
+    mode: '0644'
+
+- name: Create Desktop directory for dev user
+  ansible.builtin.file:
+    path: "{{ dev_user_home }}/Desktop"
+    state: directory
+    mode: '0755'
+    owner: "{{ dev_username }}"
+    group: "{{ dev_username }}"
+
+- name: Copy desktop files to user Desktop
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ dev_user_home }}/Desktop/{{ item }}"
+    mode: '0755'
+    owner: "{{ dev_username }}"
+    group: "{{ dev_username }}"
+  loop:
+    - devvm-onboarding.desktop
+    - devvm-finish-setup.desktop
+    - devvm-view-log.desktop
+
+- name: Copy README to user Desktop
+  ansible.builtin.copy:
+    src: README-START-HERE.md
+    dest: "{{ dev_user_home }}/Desktop/README-START-HERE.md"
+    mode: '0644'
+    owner: "{{ dev_username }}"
+    group: "{{ dev_username }}"
+
+- name: Trust desktop files for dev user
+  ansible.builtin.command: gio set "{{ dev_user_home }}/Desktop/{{ item }}" metadata::trusted true
+  loop:
+    - devvm-onboarding.desktop
+    - devvm-finish-setup.desktop
+    - devvm-view-log.desktop
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+  failed_when: false
+  changed_when: false

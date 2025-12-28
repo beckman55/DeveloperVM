@@ -1,0 +1,18 @@
+[Unit]
+Description=DevVM Provisioning Service
+Documentation=https://github.com/beckman55/DeveloperVM
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/devvm/provisioning.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/devvm-provision
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=3600
+Environment=DEBIAN_FRONTEND=noninteractive
+
+[Install]
+WantedBy=multi-user.target

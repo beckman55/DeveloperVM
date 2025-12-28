@@ -1,0 +1,63 @@
+---
+# DevVM Configuration Variables
+# These can be overridden in host_vars or via extra-vars
+
+# User configuration
+dev_username: developer
+dev_user_home: "/home/{{ dev_username }}"
+
+# System settings
+timezone: Europe/Berlin
+locale: en_US.UTF-8
+
+# Repository settings
+repo_url: "https://github.com/beckman55/DeveloperVM.git"
+repo_branch: main
+
+# Retry/resilience settings
+max_retries: 5
+retry_delay: 5
+
+# Optional features
+enable_zsh: false
+enable_fonts: true
+
+# VS Code settings
+vscode_extensions:
+  - ms-python.python
+  - ms-python.vscode-pylance
+  - ms-toolsai.jupyter
+  - charliermarsh.ruff
+  - eamodio.gitlens
+  - ms-azuretools.vscode-docker
+  - ms-vscode-remote.remote-containers
+  - ms-vscode-remote.remote-ssh
+  - redhat.vscode-yaml
+  - esbenp.prettier-vscode
+  # Claude Code extension - parameterized, update if ID changes
+  - anthropic.claude-code
+
+# Claude Code CLI installation
+# Parameterized - update install_method if installation method changes
+claude_code_install_method: npm
+claude_code_npm_package: "@anthropic-ai/claude-code"
+
+# Node.js version
+nodejs_version: "20"
+
+# Docker settings
+docker_users:
+  - "{{ dev_username }}"
+
+# Bitwarden CLI version (leave empty for latest)
+bitwarden_cli_version: ""
+
+# Fonts to install
+fonts_packages:
+  - fonts-firacode
+  - fonts-jetbrains-mono
+
+# State/log paths
+devvm_state_dir: /var/lib/devvm
+devvm_log_file: /var/log/devvm-provision.log
+devvm_share_dir: /usr/share/devvm

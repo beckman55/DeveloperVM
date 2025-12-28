@@ -1,0 +1,93 @@
+---
+# DevVM Main Playbook
+# This playbook configures a complete developer environment
+
+- name: Configure DevVM
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Ensure apt cache is updated
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure required directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ devvm_state_dir }}"
+        - "{{ devvm_share_dir }}"
+
+  roles:
+    - role: locale
+      tags: [locale, base]
+
+    - role: base-packages
+      tags: [base, packages]
+
+    - role: docker
+      tags: [docker, containers]
+
+    - role: nodejs
+      tags: [nodejs, node]
+
+    - role: python
+      tags: [python]
+
+    - role: vscode
+      tags: [vscode, editor]
+
+    - role: git-tools
+      tags: [git, tools]
+
+    - role: productivity
+      tags: [productivity, tools]
+
+    - role: bitwarden
+      tags: [bitwarden, secrets]
+
+    - role: claude-code
+      tags: [claude, ai]
+
+    - role: fonts
+      tags: [fonts]
+      when: enable_fonts | bool
+
+    - role: zsh
+      tags: [zsh, shell]
+      when: enable_zsh | bool
+
+    - role: desktop-assets
+      tags: [desktop, assets]
+
+    - role: power-settings
+      tags: [power, display]
+
+  post_tasks:
+    - name: Mark provisioning complete in state file
+      ansible.builtin.copy:
+        content: |
+          {
+            "phase": "complete",
+            "status": "done",
+            "retries": 0,
+            "last_run": "{{ ansible_date_time.iso8601 }}",
+            "errors": []
+          }
+        dest: "{{ devvm_state_dir }}/state.json"
+        mode: '0644'
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          DevVM Provisioning Complete!
+          ============================================
+          All roles have been applied successfully.
+          The system will reboot to finalize setup.
+          ============================================

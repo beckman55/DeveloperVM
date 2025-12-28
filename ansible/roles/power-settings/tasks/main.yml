@@ -1,0 +1,95 @@
+---
+# Power and display settings role
+# Prevents sleep, screen blank, lock screen for wizard visibility
+
+- name: Create dconf profile directory
+  ansible.builtin.file:
+    path: /etc/dconf/profile
+    state: directory
+    mode: '0755'
+
+- name: Create dconf user profile
+  ansible.builtin.copy:
+    content: |
+      user-db:user
+      system-db:local
+    dest: /etc/dconf/profile/user
+    mode: '0644'
+
+- name: Create dconf database directory
+  ansible.builtin.file:
+    path: /etc/dconf/db/local.d
+    state: directory
+    mode: '0755'
+
+- name: Configure power settings via dconf
+  ansible.builtin.copy:
+    content: |
+      [org/cinnamon/settings-daemon/plugins/power]
+      sleep-display-ac=0
+      sleep-display-battery=0
+      sleep-inactive-ac-timeout=0
+      sleep-inactive-battery-timeout=0
+      idle-dim-time=0
+      idle-brightness=100
+
+      [org/cinnamon/desktop/session]
+      idle-delay=uint32 0
+
+      [org/cinnamon/desktop/screensaver]
+      lock-enabled=false
+      idle-activation-enabled=false
+
+      [org/gnome/desktop/screensaver]
+      lock-enabled=false
+      idle-activation-enabled=false
+
+      [org/gnome/settings-daemon/plugins/power]
+      sleep-inactive-ac-type='nothing'
+      sleep-inactive-battery-type='nothing'
+      idle-dim=false
+    dest: /etc/dconf/db/local.d/00-devvm-power
+    mode: '0644'
+  notify: Update dconf
+
+- name: Create xorg conf directory
+  ansible.builtin.file:
+    path: /etc/X11/xorg.conf.d
+    state: directory
+    mode: '0755'
+
+- name: Disable DPMS via xorg config
+  ansible.builtin.copy:
+    content: |
+      Section "ServerFlags"
+          Option "BlankTime" "0"
+          Option "StandbyTime" "0"
+          Option "SuspendTime" "0"
+          Option "OffTime" "0"
+      EndSection
+
+      Section "Monitor"
+          Identifier "Monitor0"
+          Option "DPMS" "false"
+      EndSection
+    dest: /etc/X11/xorg.conf.d/10-monitor.conf
+    mode: '0644'
+
+- name: Mask systemd sleep targets
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+  loop:
+    - sleep.target
+    - suspend.target
+    - hibernate.target
+    - hybrid-sleep.target
+  ignore_errors: true
+
+- name: Create user-level power settings for dev user
+  ansible.builtin.file:
+    path: "{{ dev_user_home }}/.config/dconf"
+    state: directory
+    mode: '0755'
+    owner: "{{ dev_username }}"
+    group: "{{ dev_username }}"

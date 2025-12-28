@@ -1,0 +1,30 @@
+---
+# Developer fonts installation role
+
+- name: Install font packages
+  ansible.builtin.apt:
+    name: "{{ fonts_packages }}"
+    state: present
+  ignore_errors: true
+
+- name: Create fonts directory for dev user
+  ansible.builtin.file:
+    path: "{{ dev_user_home }}/.local/share/fonts"
+    state: directory
+    mode: '0755'
+    owner: "{{ dev_username }}"
+    group: "{{ dev_username }}"
+
+- name: Refresh font cache
+  ansible.builtin.command: fc-cache -f
+  changed_when: true
+
+- name: List installed coding fonts
+  ansible.builtin.shell: fc-list | grep -iE "(fira|jetbrains)" | head -5
+  register: fonts_list
+  changed_when: false
+  failed_when: false
+
+- name: Display installed fonts
+  ansible.builtin.debug:
+    msg: "Installed coding fonts: {{ fonts_list.stdout_lines | default(['None found via apt']) }}"

@@ -1,0 +1,493 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  # Locale and keyboard
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  # Timezone
+  timezone: Europe/Berlin
+
+  # Identity - create primary user
+  identity:
+    hostname: developervm
+    username: developer
+    # Password: "developer" - hashed with mkpasswd
+    password: "$6$rounds=4096$randomsalt$KQH7QK8X5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E"
+
+  # Storage - use entire disk
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+
+  # Network - DHCP
+  network:
+    version: 2
+    ethernets:
+      enp0s3:
+        dhcp4: true
+      ens33:
+        dhcp4: true
+      eth0:
+        dhcp4: true
+
+  # SSH
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # Package sources
+  apt:
+    preserve_sources_list: false
+    primary:
+      - arches: [amd64, i386]
+        uri: http://archive.ubuntu.com/ubuntu
+    security:
+      - arches: [amd64, i386]
+        uri: http://security.ubuntu.com/ubuntu
+
+  # Packages to install during autoinstall
+  packages:
+    # Desktop environment
+    - ubuntu-desktop-minimal
+    - cinnamon-desktop-environment
+    - lightdm
+    - slick-greeter
+    # Bootstrap packages
+    - git
+    - curl
+    - ca-certificates
+    - gnupg
+    - unzip
+    - jq
+    - python3
+    - python3-pip
+    - python3-venv
+    - ansible
+    # System utilities
+    - openssh-server
+    - locales
+    - software-properties-common
+    - apt-transport-https
+
+  # Late commands - run after installation
+  late-commands:
+    # Ensure UTF-8 locale
+    - curtin in-target -- locale-gen en_US.UTF-8
+    - curtin in-target -- update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+    # Create devvm directories
+    - curtin in-target -- mkdir -p /var/lib/devvm
+    - curtin in-target -- mkdir -p /var/log
+
+    # Initialize state file
+    - |
+      cat > /target/var/lib/devvm/state.json << 'STATEOF'
+      {
+        "phase": "provisioning",
+        "status": "pending",
+        "retries": 0,
+        "last_run": null,
+        "errors": []
+      }
+      STATEOF
+
+    # Create provisioning log
+    - curtin in-target -- touch /var/log/devvm-provision.log
+    - curtin in-target -- chmod 644 /var/log/devvm-provision.log
+
+    # Copy provisioning script
+    - |
+      cat > /target/usr/local/sbin/devvm-provision << 'PROVISIONEOF'
+      #!/bin/bash
+      # DevVM Provisioning Script
+      # This script runs at boot until provisioning is complete
+
+      set -o pipefail
+
+      LOG_FILE="/var/log/devvm-provision.log"
+      STATE_FILE="/var/lib/devvm/state.json"
+      DONE_FILE="/var/lib/devvm/provisioning.done"
+      NEEDS_ATTENTION_FILE="/var/lib/devvm/provisioning.needs_attention"
+      MAX_RETRIES=5
+      REPO_URL="https://github.com/beckman55/DeveloperVM.git"
+      REPO_BRANCH="main"
+
+      log() {
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+      }
+
+      update_state() {
+          local status="$1"
+          local phase="$2"
+          local error="$3"
+          local retries
+          retries=$(jq -r '.retries // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+
+          if [[ -n "$error" ]]; then
+              jq --arg status "$status" \
+                 --arg phase "$phase" \
+                 --arg error "$error" \
+                 --arg last_run "$(date -Iseconds)" \
+                 '.status = $status | .phase = $phase | .last_run = $last_run | .errors += [$error]' \
+                 "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+          else
+              jq --arg status "$status" \
+                 --arg phase "$phase" \
+                 --arg last_run "$(date -Iseconds)" \
+                 '.status = $status | .phase = $phase | .last_run = $last_run' \
+                 "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+          fi
+      }
+
+      increment_retries() {
+          local retries
+          retries=$(jq -r '.retries // 0' "$STATE_FILE")
+          retries=$((retries + 1))
+          jq --argjson retries "$retries" '.retries = $retries' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+          echo "$retries"
+      }
+
+      wait_for_apt_lock() {
+          local max_wait=300
+          local waited=0
+          while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+              if [[ $waited -ge $max_wait ]]; then
+                  log "ERROR: Timed out waiting for apt lock"
+                  return 1
+              fi
+              log "Waiting for apt lock..."
+              sleep 5
+              waited=$((waited + 5))
+          done
+          return 0
+      }
+
+      run_with_retry() {
+          local cmd="$1"
+          local max_attempts=3
+          local attempt=1
+          local backoff=5
+
+          while [[ $attempt -le $max_attempts ]]; do
+              log "Attempt $attempt/$max_attempts: $cmd"
+              if eval "$cmd"; then
+                  return 0
+              fi
+              log "Command failed, waiting ${backoff}s before retry..."
+              sleep $backoff
+              backoff=$((backoff * 2))
+              attempt=$((attempt + 1))
+          done
+          return 1
+      }
+
+      validate_critical_tools() {
+          local missing=()
+
+          # Check git
+          command -v git >/dev/null 2>&1 || missing+=("git")
+
+          # Check VS Code
+          command -v code >/dev/null 2>&1 || missing+=("code")
+
+          # Check python3
+          command -v python3 >/dev/null 2>&1 || missing+=("python3")
+
+          # Check uv
+          command -v uv >/dev/null 2>&1 || missing+=("uv")
+
+          # Check Claude Code CLI
+          command -v claude >/dev/null 2>&1 || missing+=("claude")
+
+          if [[ ${#missing[@]} -gt 0 ]]; then
+              log "Missing critical tools: ${missing[*]}"
+              return 1
+          fi
+
+          log "All critical tools validated"
+          return 0
+      }
+
+      setup_desktop_assets() {
+          local user="$1"
+          local user_home
+          user_home=$(getent passwd "$user" | cut -d: -f6)
+
+          log "Setting up desktop assets for $user"
+
+          # Create Desktop directory
+          sudo -u "$user" mkdir -p "$user_home/Desktop"
+
+          # Copy desktop files
+          for desktop_file in /usr/share/applications/devvm-*.desktop; do
+              if [[ -f "$desktop_file" ]]; then
+                  cp "$desktop_file" "$user_home/Desktop/"
+                  chown "$user:$user" "$user_home/Desktop/$(basename "$desktop_file")"
+                  chmod +x "$user_home/Desktop/$(basename "$desktop_file")"
+              fi
+          done
+
+          # Copy README
+          if [[ -f /usr/share/devvm/README-START-HERE.md ]]; then
+              cp /usr/share/devvm/README-START-HERE.md "$user_home/Desktop/"
+              chown "$user:$user" "$user_home/Desktop/README-START-HERE.md"
+          fi
+
+          # Trust desktop files (for GNOME/Cinnamon)
+          sudo -u "$user" bash -c "
+              if command -v gio >/dev/null 2>&1; then
+                  for f in $user_home/Desktop/*.desktop; do
+                      gio set \"\$f\" metadata::trusted true 2>/dev/null || true
+                  done
+              fi
+          "
+      }
+
+      configure_no_sleep() {
+          log "Configuring power settings to prevent sleep/blank"
+
+          # System-level settings via dconf
+          mkdir -p /etc/dconf/profile
+          cat > /etc/dconf/profile/user << 'DCONFPROFILE'
+      user-db:user
+      system-db:local
+      DCONFPROFILE
+
+          mkdir -p /etc/dconf/db/local.d
+          cat > /etc/dconf/db/local.d/00-devvm-power << 'DCONFPOWER'
+      [org/cinnamon/settings-daemon/plugins/power]
+      sleep-display-ac=0
+      sleep-display-battery=0
+      sleep-inactive-ac-timeout=0
+      sleep-inactive-battery-timeout=0
+      idle-dim-time=0
+      idle-brightness=100
+
+      [org/cinnamon/desktop/session]
+      idle-delay=uint32 0
+
+      [org/cinnamon/desktop/screensaver]
+      lock-enabled=false
+      idle-activation-enabled=false
+
+      [org/gnome/desktop/screensaver]
+      lock-enabled=false
+      idle-activation-enabled=false
+
+      [org/gnome/settings-daemon/plugins/power]
+      sleep-inactive-ac-type='nothing'
+      sleep-inactive-battery-type='nothing'
+      idle-dim=false
+      DCONFPOWER
+
+          dconf update
+
+          # Disable DPMS via xorg config
+          mkdir -p /etc/X11/xorg.conf.d
+          cat > /etc/X11/xorg.conf.d/10-monitor.conf << 'XORGCONF'
+      Section "ServerFlags"
+          Option "BlankTime" "0"
+          Option "StandbyTime" "0"
+          Option "SuspendTime" "0"
+          Option "OffTime" "0"
+      EndSection
+
+      Section "Monitor"
+          Identifier "Monitor0"
+          Option "DPMS" "false"
+      EndSection
+      XORGCONF
+
+          # Disable systemd sleep targets
+          systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+
+          log "Power settings configured"
+      }
+
+      enable_autologin() {
+          local user="$1"
+          log "Enabling auto-login for $user"
+
+          # Configure LightDM
+          mkdir -p /etc/lightdm/lightdm.conf.d
+          cat > /etc/lightdm/lightdm.conf.d/50-devvm-autologin.conf << LIGHTDMCONF
+      [Seat:*]
+      autologin-user=$user
+      autologin-user-timeout=0
+      user-session=cinnamon
+      LIGHTDMCONF
+
+          # Configure for GDM as fallback
+          if [[ -f /etc/gdm3/custom.conf ]]; then
+              sed -i "s/^#.*AutomaticLoginEnable.*/AutomaticLoginEnable=true/" /etc/gdm3/custom.conf
+              sed -i "s/^#.*AutomaticLogin .*/AutomaticLogin=$user/" /etc/gdm3/custom.conf
+          fi
+
+          log "Auto-login enabled for $user"
+      }
+
+      main() {
+          log "=========================================="
+          log "DevVM Provisioning Started"
+          log "=========================================="
+
+          # Check if already done
+          if [[ -f "$DONE_FILE" ]]; then
+              log "Provisioning already complete"
+              exit 0
+          fi
+
+          # Check for resume flag
+          local resume_mode=false
+          if [[ "$1" == "--resume" ]]; then
+              resume_mode=true
+              log "Running in resume mode"
+          fi
+
+          # Get current retry count
+          local retries
+          retries=$(jq -r '.retries // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+
+          if [[ $retries -ge $MAX_RETRIES && "$resume_mode" != "true" ]]; then
+              log "ERROR: Max retries ($MAX_RETRIES) exceeded"
+              update_state "needs_attention" "provisioning" "Max retries exceeded"
+              touch "$NEEDS_ATTENTION_FILE"
+
+              # Still enable autologin so user can see the desktop
+              enable_autologin "developer"
+              setup_desktop_assets "developer"
+              configure_no_sleep
+
+              exit 1
+          fi
+
+          update_state "running" "provisioning"
+          retries=$(increment_retries)
+          log "Retry count: $retries/$MAX_RETRIES"
+
+          # Wait for network
+          log "Waiting for network..."
+          local net_wait=0
+          while ! ping -c 1 archive.ubuntu.com >/dev/null 2>&1; do
+              if [[ $net_wait -ge 120 ]]; then
+                  log "ERROR: Network not available after 120s"
+                  update_state "error" "provisioning" "Network timeout"
+                  exit 1
+              fi
+              sleep 5
+              net_wait=$((net_wait + 5))
+          done
+          log "Network available"
+
+          # Wait for apt lock
+          wait_for_apt_lock || exit 1
+
+          # Update package lists
+          log "Updating package lists..."
+          if ! run_with_retry "apt-get update"; then
+              log "ERROR: Failed to update package lists"
+              update_state "error" "apt-update" "apt-get update failed"
+              exit 1
+          fi
+
+          # Full upgrade
+          log "Running full upgrade..."
+          export DEBIAN_FRONTEND=noninteractive
+          if ! run_with_retry "apt-get full-upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold'"; then
+              log "WARNING: Full upgrade had issues, continuing..."
+          fi
+
+          # Run ansible-pull
+          log "Running ansible-pull from $REPO_URL..."
+          if ! ansible-pull -U "$REPO_URL" -C "$REPO_BRANCH" -d /tmp/devvm-ansible -i localhost, ansible/site.yml 2>&1 | tee -a "$LOG_FILE"; then
+              log "ERROR: ansible-pull failed"
+              update_state "error" "ansible" "ansible-pull failed"
+              exit 1
+          fi
+
+          # Validate critical tools
+          log "Validating critical tools..."
+          if ! validate_critical_tools; then
+              log "ERROR: Critical tools validation failed"
+              update_state "error" "validation" "Critical tools missing"
+              exit 1
+          fi
+
+          # Check for reboot required
+          if [[ -f /var/run/reboot-required ]]; then
+              log "Reboot required, scheduling reboot..."
+              update_state "rebooting" "provisioning"
+              sync
+              sleep 2
+              reboot
+              exit 0
+          fi
+
+          # SUCCESS!
+          log "=========================================="
+          log "Provisioning completed successfully!"
+          log "=========================================="
+
+          update_state "done" "complete"
+          touch "$DONE_FILE"
+
+          # Final setup
+          configure_no_sleep
+          setup_desktop_assets "developer"
+          enable_autologin "developer"
+
+          # Final reboot to clean state
+          log "Rebooting to finalize..."
+          sync
+          sleep 2
+          reboot
+      }
+
+      main "$@"
+      PROVISIONEOF
+    - curtin in-target -- chmod +x /usr/local/sbin/devvm-provision
+
+    # Create systemd service
+    - |
+      cat > /target/etc/systemd/system/devvm-provision.service << 'SERVICEEOF'
+      [Unit]
+      Description=DevVM Provisioning Service
+      After=network-online.target
+      Wants=network-online.target
+      ConditionPathExists=!/var/lib/devvm/provisioning.done
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/devvm-provision
+      RemainAfterExit=yes
+      StandardOutput=journal+console
+      StandardError=journal+console
+      TimeoutStartSec=3600
+
+      [Install]
+      WantedBy=multi-user.target
+      SERVICEEOF
+
+    # Enable the provisioning service
+    - curtin in-target -- systemctl enable devvm-provision.service
+
+    # Set Cinnamon as default session
+    - |
+      cat > /target/var/lib/AccountsService/users/developer << 'ACCOUNTEOF'
+      [User]
+      Session=cinnamon
+      SystemAccount=false
+      ACCOUNTEOF
+
+    # Verify autoinstall seed was found (fail loudly if not)
+    - |
+      if [ ! -f /cdrom/nocloud/user-data ]; then
+          echo "FATAL ERROR: /cdrom/nocloud/user-data not found!"
+          echo "Autoinstall seed is missing. Installation cannot proceed correctly."
+          echo "Please verify ISO was built correctly with embedded nocloud seed."
+          exit 1
+      fi

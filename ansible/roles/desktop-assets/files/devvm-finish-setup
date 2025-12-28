@@ -1,0 +1,273 @@
+#!/bin/bash
+#
+# DevVM Finish Setup Wizard
+# Helps users resolve installation issues and retry provisioning
+#
+
+set -e
+
+TITLE="DevVM Finish Setup"
+LOG_FILE="/var/log/devvm-provision.log"
+STATE_FILE="/var/lib/devvm/state.json"
+
+# Check for zenity or yad
+if command -v yad >/dev/null 2>&1; then
+    DIALOG_CMD="yad"
+elif command -v zenity >/dev/null 2>&1; then
+    DIALOG_CMD="zenity"
+else
+    echo "Error: Neither zenity nor yad is installed"
+    exit 1
+fi
+
+show_message() {
+    local msg="$1"
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" --text="$msg" --button="OK:0" --width=400
+    else
+        zenity --info --title="$TITLE" --text="$msg" --width=400
+    fi
+}
+
+show_error() {
+    local msg="$1"
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" --text="$msg" --button="OK:0" --width=400 --image="dialog-error"
+    else
+        zenity --error --title="$TITLE" --text="$msg" --width=400
+    fi
+}
+
+check_tool() {
+    local tool="$1"
+    if command -v "$tool" >/dev/null 2>&1; then
+        echo "INSTALLED"
+    else
+        echo "MISSING"
+    fi
+}
+
+get_status_list() {
+    local list=""
+
+    # Critical tools
+    list+="git|Critical|$(check_tool git)\n"
+    list+="code (VS Code)|Critical|$(check_tool code)\n"
+    list+="python3|Critical|$(check_tool python3)\n"
+    list+="uv|Critical|$(check_tool uv)\n"
+    list+="claude (Claude Code)|Critical|$(check_tool claude)\n"
+
+    # Optional tools
+    list+="docker|Optional|$(check_tool docker)\n"
+    list+="gh (GitHub CLI)|Optional|$(check_tool gh)\n"
+    list+="node|Optional|$(check_tool node)\n"
+    list+="rg (ripgrep)|Optional|$(check_tool rg)\n"
+    list+="fzf|Optional|$(check_tool fzf)\n"
+    list+="tmux|Optional|$(check_tool tmux)\n"
+    list+="bw (Bitwarden)|Optional|$(check_tool bw)\n"
+
+    echo -e "$list"
+}
+
+show_status() {
+    local status_list
+    status_list=$(get_status_list)
+
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        echo -e "$status_list" | yad --title="$TITLE - Installation Status" \
+            --list \
+            --column="Tool" \
+            --column="Type" \
+            --column="Status" \
+            --width=500 \
+            --height=400 \
+            --button="Close:0"
+    else
+        echo -e "$status_list" | zenity --list \
+            --title="$TITLE - Installation Status" \
+            --column="Tool" \
+            --column="Type" \
+            --column="Status" \
+            --width=500 \
+            --height=400
+    fi
+}
+
+retry_install() {
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" \
+            --text="This will run the provisioning script to install missing tools.\n\nYou may be prompted for your password." \
+            --button="Cancel:1" \
+            --button="Continue:0" \
+            --width=400
+    else
+        zenity --question \
+            --title="$TITLE" \
+            --text="This will run the provisioning script to install missing tools.\n\nYou may be prompted for your password." \
+            --width=400
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        # Run provisioning in a terminal
+        if command -v gnome-terminal >/dev/null 2>&1; then
+            gnome-terminal -- bash -c "sudo /usr/local/bin/devvm-provision --resume; echo 'Press Enter to close'; read"
+        elif command -v xterm >/dev/null 2>&1; then
+            xterm -e "sudo /usr/local/bin/devvm-provision --resume; echo 'Press Enter to close'; read"
+        else
+            pkexec /usr/local/bin/devvm-provision --resume
+        fi
+        show_message "Provisioning complete. Please check the status again."
+    fi
+}
+
+reboot_and_retry() {
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" \
+            --text="This will reboot the system and retry provisioning.\n\nSave any open work before continuing." \
+            --button="Cancel:1" \
+            --button="Reboot Now:0" \
+            --width=400
+    else
+        zenity --question \
+            --title="$TITLE" \
+            --text="This will reboot the system and retry provisioning.\n\nSave any open work before continuing." \
+            --width=400
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        # Reset retry counter
+        if [[ -f "$STATE_FILE" ]]; then
+            sudo jq '.retries = 0' "$STATE_FILE" | sudo tee "${STATE_FILE}.tmp" > /dev/null
+            sudo mv "${STATE_FILE}.tmp" "$STATE_FILE"
+        fi
+        # Remove needs_attention flag
+        sudo rm -f /var/lib/devvm/provisioning.needs_attention
+        # Reboot
+        sudo reboot
+    fi
+}
+
+view_log() {
+    if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$LOG_FILE" 2>/dev/null || cat "$LOG_FILE" | less
+    else
+        if [[ "$DIALOG_CMD" == "yad" ]]; then
+            yad --title="Provisioning Log" --text-info --filename="$LOG_FILE" --width=800 --height=600
+        else
+            zenity --text-info --title="Provisioning Log" --filename="$LOG_FILE" --width=800 --height=600
+        fi
+    fi
+}
+
+skip_to_onboarding() {
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" \
+            --text="Some critical tools may be missing.\n\nAre you sure you want to skip to onboarding?" \
+            --button="Cancel:1" \
+            --button="Skip Anyway:0" \
+            --width=400
+    else
+        zenity --question \
+            --title="$TITLE" \
+            --text="Some critical tools may be missing.\n\nAre you sure you want to skip to onboarding?" \
+            --width=400
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        /usr/local/bin/devvm-onboarding &
+        exit 0
+    fi
+}
+
+check_all_critical() {
+    local missing=0
+    command -v git >/dev/null 2>&1 || missing=$((missing + 1))
+    command -v code >/dev/null 2>&1 || missing=$((missing + 1))
+    command -v python3 >/dev/null 2>&1 || missing=$((missing + 1))
+    command -v uv >/dev/null 2>&1 || missing=$((missing + 1))
+    command -v claude >/dev/null 2>&1 || missing=$((missing + 1))
+    return $missing
+}
+
+main_menu() {
+    while true; do
+        local choice
+
+        # Check if all critical tools are present
+        if check_all_critical; then
+            # All tools present - offer to start onboarding
+            if [[ "$DIALOG_CMD" == "yad" ]]; then
+                choice=$(yad --title="$TITLE" \
+                    --text="All critical tools are installed!\n\nYou can now start the onboarding wizard." \
+                    --form \
+                    --button="Start Onboarding Now:0" \
+                    --button="View Status:1" \
+                    --button="Exit:2" \
+                    --width=400)
+                case $? in
+                    0) /usr/local/bin/devvm-onboarding & exit 0 ;;
+                    1) show_status ;;
+                    *) exit 0 ;;
+                esac
+            else
+                choice=$(zenity --list \
+                    --title="$TITLE" \
+                    --text="All critical tools are installed!" \
+                    --column="Action" \
+                    "Start Onboarding Now" \
+                    "View Status" \
+                    "Exit" \
+                    --width=400 --height=300)
+                case "$choice" in
+                    "Start Onboarding Now") /usr/local/bin/devvm-onboarding & exit 0 ;;
+                    "View Status") show_status ;;
+                    *) exit 0 ;;
+                esac
+            fi
+        else
+            # Some tools missing
+            if [[ "$DIALOG_CMD" == "yad" ]]; then
+                choice=$(yad --title="$TITLE" \
+                    --text="Some critical tools are missing.\n\nChoose an action:" \
+                    --form \
+                    --button="View Status:1" \
+                    --button="Retry Install:2" \
+                    --button="Reboot and Retry:3" \
+                    --button="View Log:4" \
+                    --button="Skip to Onboarding:5" \
+                    --button="Exit:6" \
+                    --width=400)
+                case $? in
+                    1) show_status ;;
+                    2) retry_install ;;
+                    3) reboot_and_retry ;;
+                    4) view_log ;;
+                    5) skip_to_onboarding ;;
+                    *) exit 0 ;;
+                esac
+            else
+                choice=$(zenity --list \
+                    --title="$TITLE" \
+                    --text="Some critical tools are missing." \
+                    --column="Action" \
+                    "View Status" \
+                    "Retry Install (Recommended)" \
+                    "Reboot and Retry" \
+                    "View Log" \
+                    "Skip and Start Onboarding" \
+                    "Exit" \
+                    --width=400 --height=350)
+                case "$choice" in
+                    "View Status") show_status ;;
+                    "Retry Install (Recommended)") retry_install ;;
+                    "Reboot and Retry") reboot_and_retry ;;
+                    "View Log") view_log ;;
+                    "Skip and Start Onboarding") skip_to_onboarding ;;
+                    *) exit 0 ;;
+                esac
+            fi
+        fi
+    done
+}
+
+main_menu

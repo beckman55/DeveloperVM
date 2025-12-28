@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=View Provisioning Log
+Comment=View DevVM provisioning log
+Exec=xdg-open /var/log/devvm-provision.log
+Icon=text-x-log
+Terminal=false
+Categories=System;
+Keywords=log;provision;devvm;

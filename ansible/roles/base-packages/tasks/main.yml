@@ -1,0 +1,51 @@
+---
+# Base packages installation role
+
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - pkg-config
+      - cmake
+      - python3-dev
+      - libssl-dev
+      - libffi-dev
+    state: present
+
+- name: Install system utilities
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - unzip
+      - ca-certificates
+      - gnupg
+      - jq
+      - software-properties-common
+      - apt-transport-https
+    state: present
+
+- name: Install yq
+  ansible.builtin.get_url:
+    url: "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+    dest: /usr/local/bin/yq
+    mode: '0755'
+
+- name: Install httpie
+  ansible.builtin.apt:
+    name: httpie
+    state: present
+
+- name: Install UX helper packages
+  ansible.builtin.apt:
+    name:
+      - zenity
+      - xdg-utils
+      - wmctrl
+    state: present
+
+- name: Try to install yad (optional)
+  ansible.builtin.apt:
+    name: yad
+    state: present
+  ignore_errors: true
