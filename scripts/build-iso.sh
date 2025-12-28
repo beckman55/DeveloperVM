@@ -268,40 +268,106 @@ rebuild_iso() {
     # Remove old ISO if exists
     rm -f "$OUTPUT_ISO"
 
-    # Rebuild ISO using xorriso
-    xorriso -as mkisofs \
-        -r -V "DevVM Ubuntu 24.04" \
-        -o "$OUTPUT_ISO" \
-        -J -joliet-long \
-        -partition_offset 16 \
-        --grub2-mbr --interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:"$SOURCE_ISO" \
-        --mbr-force-bootable \
-        -append_partition 2 0xef --interval:local_fs:5765572d-5773307d::"$SOURCE_ISO" \
-        -appended_part_as_gpt \
-        -c isolinux/boot.cat \
-        -b isolinux/isolinux.bin \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
-        --grub2-boot-info \
-        -eltorito-alt-boot \
-        -e '--interval:appended_partition_2:::' \
-        -no-emul-boot \
-        -isohybrid-gpt-basdat \
-        "$ISO_EXTRACT_DIR" 2>&1 || {
-            # Fallback to simpler xorriso command if the complex one fails
-            log_warn "Complex xorriso failed, trying simpler approach..."
-            xorriso -as mkisofs \
-                -r -V "DevVM Ubuntu 24.04" \
-                -o "$OUTPUT_ISO" \
-                -J -joliet-long \
-                -b isolinux/isolinux.bin \
-                -c isolinux/boot.cat \
-                -no-emul-boot \
-                -boot-load-size 4 \
-                -boot-info-table \
-                "$ISO_EXTRACT_DIR"
-        }
+    # Detect boot configuration
+    local has_isolinux=false
+    local has_efi=false
+    local efi_img=""
+
+    if [[ -f "$ISO_EXTRACT_DIR/isolinux/isolinux.bin" ]]; then
+        has_isolinux=true
+        log_info "Detected: Legacy BIOS boot (isolinux)"
+    fi
+
+    if [[ -d "$ISO_EXTRACT_DIR/EFI" ]]; then
+        has_efi=true
+        log_info "Detected: EFI boot"
+        # Find EFI boot image
+        for img in "$ISO_EXTRACT_DIR/boot/grub/efi.img" "$ISO_EXTRACT_DIR/EFI/boot/efiboot.img" "$ISO_EXTRACT_DIR/efi.img"; do
+            if [[ -f "$img" ]]; then
+                efi_img="$img"
+                break
+            fi
+        done
+    fi
+
+    if [[ "$has_isolinux" == "true" && "$has_efi" == "true" ]]; then
+        # Hybrid ISO (BIOS + EFI)
+        log_info "Building hybrid BIOS/EFI ISO..."
+        xorriso -as mkisofs \
+            -r -V "DevVM-Ubuntu" \
+            -o "$OUTPUT_ISO" \
+            -J -joliet-long \
+            -c isolinux/boot.cat \
+            -b isolinux/isolinux.bin \
+            -no-emul-boot \
+            -boot-load-size 4 \
+            -boot-info-table \
+            -eltorito-alt-boot \
+            -e boot/grub/efi.img \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            "$ISO_EXTRACT_DIR"
+    elif [[ "$has_efi" == "true" ]]; then
+        # EFI-only ISO (Ubuntu Cinnamon uses this)
+        log_info "Building EFI-only ISO..."
+
+        # Create the EFI boot image if needed
+        if [[ ! -f "$ISO_EXTRACT_DIR/boot/grub/efi.img" ]]; then
+            log_info "Creating EFI boot image..."
+            mkdir -p "$ISO_EXTRACT_DIR/boot/grub"
+
+            # Create a small FAT image for EFI
+            dd if=/dev/zero of="$ISO_EXTRACT_DIR/boot/grub/efi.img" bs=1M count=10 2>/dev/null
+            mkfs.vfat "$ISO_EXTRACT_DIR/boot/grub/efi.img" 2>/dev/null || true
+
+            # Mount and copy EFI files
+            local efi_mount="$WORK_DIR/efi_mount"
+            mkdir -p "$efi_mount"
+            if sudo mount -o loop "$ISO_EXTRACT_DIR/boot/grub/efi.img" "$efi_mount" 2>/dev/null; then
+                sudo mkdir -p "$efi_mount/EFI/boot"
+                sudo cp -r "$ISO_EXTRACT_DIR/EFI/boot/"* "$efi_mount/EFI/boot/" 2>/dev/null || true
+                sudo umount "$efi_mount"
+            fi
+        fi
+
+        xorriso -as mkisofs \
+            -r -V "DevVM-Ubuntu" \
+            -o "$OUTPUT_ISO" \
+            -J -joliet-long \
+            -eltorito-alt-boot \
+            -e boot/grub/efi.img \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            "$ISO_EXTRACT_DIR" 2>&1 || {
+                # Simpler fallback for EFI
+                log_warn "Standard EFI build failed, trying alternate method..."
+                xorriso -as mkisofs \
+                    -r -V "DevVM-Ubuntu" \
+                    -o "$OUTPUT_ISO" \
+                    -J -joliet-long \
+                    -append_partition 2 0xef "$ISO_EXTRACT_DIR/boot/grub/efi.img" \
+                    -appended_part_as_gpt \
+                    "$ISO_EXTRACT_DIR" 2>&1 || {
+                        # Final fallback - simple data ISO
+                        log_warn "EFI methods failed, creating simple bootable ISO..."
+                        xorriso -as mkisofs \
+                            -r -V "DevVM-Ubuntu" \
+                            -o "$OUTPUT_ISO" \
+                            -J -joliet-long \
+                            -iso-level 3 \
+                            "$ISO_EXTRACT_DIR"
+                    }
+            }
+    else
+        # Fallback - create simple ISO
+        log_warn "No standard boot method detected, creating basic ISO..."
+        xorriso -as mkisofs \
+            -r -V "DevVM-Ubuntu" \
+            -o "$OUTPUT_ISO" \
+            -J -joliet-long \
+            -iso-level 3 \
+            "$ISO_EXTRACT_DIR"
+    fi
 
     log_info "ISO rebuilt: $OUTPUT_ISO"
 }
