@@ -432,8 +432,8 @@ verify_iso() {
         log_warn "  [WARN] Could not verify GRUB config"
     fi
 
-    # Cleanup
-    rm -rf "$verify_dir"
+    # Cleanup (use sudo in case xorriso created root-owned files)
+    sudo rm -rf "$verify_dir"
 
     if [[ $errors -gt 0 ]]; then
         log_error "Verification failed with $errors error(s)"
@@ -446,7 +446,7 @@ verify_iso() {
 
 cleanup() {
     log_info "Cleaning up work directory..."
-    rm -rf "$WORK_DIR"
+    sudo rm -rf "$WORK_DIR"
 }
 
 main() {
