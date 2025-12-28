@@ -33,6 +33,7 @@ The output ISO will be at: `build/DeveloperVM-UbuntuCinnamon-Autoinstall.iso`
 
 1. Create a new VM in VirtualBox, VMware, or your preferred hypervisor
    - Recommended: 4+ CPU cores, 8GB+ RAM, 50GB+ disk
+   - Make sure the BIOS is set to UEFI
 2. Mount `DeveloperVM-UbuntuCinnamon-Autoinstall.iso` as the boot media
 3. Boot the VM
 4. Wait for installation and provisioning to complete (30-60 minutes)
