@@ -1,8 +1,10 @@
 # DeveloperVM
 
 Unattended Ubuntu Cinnamon developer VM build:
-- Ubuntu Autoinstall (NoCloud seed)
-- Automated provisioning (ansible-pull)
-- First-login onboarding wizard (skippable, re-runnable)
+- Single custom ISO (autoinstall seed embedded)
+- Automated provisioning (ansible-pull + retry/reboot loop)
+- Post-install “Finish Setup” + “Onboarding” wizards (skippable, re-runnable)
+- Desktop README and shortcuts
 
-Status: planning + scaffolding in progress.
+Authoritative spec: BUILD_SPEC.md  
+Claude instructions: CLAUDE_TASK.md
