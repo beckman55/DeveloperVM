@@ -88,17 +88,33 @@ if [[ "$CLI_MODE" == "false" ]]; then
         CLI_MODE=true
     fi
 fi
-  # Open URL in browser with fallback (fixes xdg-open issues)
-  open_url() {
-      local url="$1"
-      xdg-open "$url" 2>/dev/null && return 0
-      if command -v firefox >/dev/null 2>&1; then
-          firefox "$url" 2>/dev/null &
-          return 0
-      fi
-      echo "Please open manually: $url"
-      return 1
-  }
+
+# Open URL in browser with fallback (fixes xdg-open issues)
+open_url() {
+    local url="$1"
+    # Try firefox first (most reliable on this system)
+    if command -v firefox >/dev/null 2>&1; then
+        firefox "$url" 2>/dev/null &
+        return 0
+    fi
+    xdg-open "$url" 2>/dev/null && return 0
+    echo "Please open manually: $url"
+    return 1
+}
+
+# Save API key to shell config files
+save_api_key() {
+    local key_name="$1"
+    local key_value="$2"
+    for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [[ -f "$rc_file" ]]; then
+            sed -i "/^export ${key_name}=/d" "$rc_file"
+            echo "export ${key_name}=\"${key_value}\"" >> "$rc_file"
+        fi
+    done
+    export "${key_name}=${key_value}"
+}
+
 # GUI helpers
 gui_message() {
     local msg="$1"
@@ -128,13 +144,21 @@ gui_entry() {
     fi
 }
 
+gui_password() {
+    local msg="$1"
+    if [[ "$DIALOG_CMD" == "yad" ]]; then
+        yad --title="$TITLE" --entry --hide-text --text="$msg" --width=500
+    else
+        zenity --password --title="$TITLE" --text="$msg" --width=500
+    fi
+}
+
 gui_form() {
     local title="$1"
     local field1_label="$2"
     local field1_default="$3"
     local field2_label="$4"
     local field2_default="$5"
-
     if [[ "$DIALOG_CMD" == "yad" ]]; then
         yad --title="$title" --form \
             --field="$field1_label" "$field1_default" \
@@ -162,10 +186,16 @@ cli_confirm() {
     [[ "$response" =~ ^[Yy] ]]
 }
 
+cli_password() {
+    local msg="$1"
+    read -rsp "$msg: " response
+    echo ""
+    echo "$response"
+}
+
 # Step implementations
 step_git_identity() {
     echo "=== Git Identity Setup ==="
-
     local current_name current_email
     current_name=$(git config --global user.name 2>/dev/null || echo "")
     current_email=$(git config --global user.email 2>/dev/null || echo "")
@@ -185,12 +215,10 @@ step_git_identity() {
         echo "  Name: ${current_name:-<not set>}"
         echo "  Email: ${current_email:-<not set>}"
         echo ""
-
         if cli_confirm "Configure git identity?"; then
             local name email
             name=$(cli_prompt "Your name" "$current_name")
             email=$(cli_prompt "Your email" "$current_email")
-
             git config --global user.name "$name"
             git config --global user.email "$email"
             echo "Git identity configured!"
@@ -202,7 +230,6 @@ step_git_identity() {
         if ! gui_question "Configure your Git identity?\n\nCurrent:\nName: ${current_name:-<not set>}\nEmail: ${current_email:-<not set>}"; then
             return 0
         fi
-
         local result
         result=$(gui_form "Git Identity" "Name:" "$current_name" "Email:" "$current_email")
         if [[ -n "$result" ]]; then
@@ -219,22 +246,20 @@ step_git_identity() {
 
 step_github_auth() {
     echo "=== GitHub Authentication ==="
-
     if [[ "$SILENT_MODE" == "true" ]]; then
         echo "Skipping GitHub auth (requires interaction)"
         return 0
     fi
-echo "TIP: Select SSH when prompted for the preferred protocol"
+    echo "TIP: Select SSH when prompted for the preferred protocol"
     if gh auth status &>/dev/null; then
         local user
         user=$(gh api user --jq '.login' 2>/dev/null || echo "unknown")
         if [[ "$CLI_MODE" == "true" ]]; then
             echo "Already authenticated to GitHub as: $user"
-            update_state "github_auth" true
         else
             gui_message "Already authenticated to GitHub as: $user"
-            update_state "github_auth" true
         fi
+        update_state "github_auth" true
         return 0
     fi
 
@@ -263,7 +288,6 @@ echo "TIP: Select SSH when prompted for the preferred protocol"
 
 step_ssh_setup() {
     echo "=== SSH Key Setup ==="
-
     local ssh_key="$HOME/.ssh/id_ed25519"
 
     if [[ "$SILENT_MODE" == "true" ]]; then
@@ -287,29 +311,25 @@ step_ssh_setup() {
                 gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)"
                 echo "SSH key added to GitHub!"
             fi
-            update_state "ssh_setup" true
         else
             if gui_question "SSH key already exists.\n\nAdd it to your GitHub account?"; then
                 gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)" 2>/dev/null || true
                 gui_message "SSH key added to GitHub!"
             fi
-            update_state "ssh_setup" true
         fi
+        update_state "ssh_setup" true
     else
         if [[ "$CLI_MODE" == "true" ]]; then
             if cli_confirm "Generate new SSH key?"; then
                 local email
                 email=$(git config --global user.email 2>/dev/null || echo "")
                 email=$(cli_prompt "Email for SSH key" "$email")
-
                 mkdir -p "$HOME/.ssh"
                 chmod 700 "$HOME/.ssh"
                 ssh-keygen -t ed25519 -f "$ssh_key" -C "$email"
-
                 eval "$(ssh-agent -s)"
                 ssh-add "$ssh_key"
                 ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
-
                 if cli_confirm "Add key to GitHub?"; then
                     gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)"
                 fi
@@ -320,15 +340,12 @@ step_ssh_setup() {
                 local email
                 email=$(git config --global user.email 2>/dev/null || echo "")
                 email=$(gui_entry "Email for SSH key:" "$email")
-
                 mkdir -p "$HOME/.ssh"
                 chmod 700 "$HOME/.ssh"
                 ssh-keygen -t ed25519 -f "$ssh_key" -N "" -C "$email"
-
                 eval "$(ssh-agent -s)"
                 ssh-add "$ssh_key"
                 ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
-
                 if gui_question "Add key to your GitHub account?"; then
                     gh ssh-key add "$ssh_key.pub" --title "DevVM $(hostname)" 2>/dev/null || true
                 fi
@@ -341,12 +358,10 @@ step_ssh_setup() {
 
 step_vscode_sync() {
     echo "=== VS Code Settings Sync ==="
-
     if [[ "$SILENT_MODE" == "true" ]]; then
         echo "Skipping VS Code sync (requires interaction)"
         return 0
     fi
-
     if [[ "$CLI_MODE" == "true" ]]; then
         echo "VS Code Settings Sync allows you to sync your settings across devices."
         if cli_confirm "Open VS Code to configure Settings Sync?"; then
@@ -367,15 +382,19 @@ step_vscode_sync() {
 
 step_bitwarden() {
     echo "=== Bitwarden Setup ==="
-
     if [[ "$SILENT_MODE" == "true" ]]; then
         echo "Skipping Bitwarden setup (requires interaction)"
         return 0
     fi
-
     if [[ "$CLI_MODE" == "true" ]]; then
         echo "Bitwarden CLI can be used to securely access your passwords."
-        if cli_confirm "Login to Bitwarden?"; then
+        echo ""
+        echo "Step 1: Open Bitwarden in your browser to get your API credentials"
+        if cli_confirm "Open Bitwarden web vault?"; then
+            open_url "https://vault.bitwarden.com"
+        fi
+        echo ""
+        if cli_confirm "Login to Bitwarden CLI?"; then
             bw login
             echo ""
             echo "To unlock your vault, run: bw unlock"
@@ -383,7 +402,9 @@ step_bitwarden() {
             update_state "bitwarden" true
         fi
     else
-        if gui_question "Configure Bitwarden CLI?\n\nThis allows secure access to your password vault from the terminal."; then
+        if gui_question "Configure Bitwarden CLI?\n\nStep 1: We'll open the Bitwarden web vault\nStep 2: Then configure the CLI\n\nClick Continue to proceed."; then
+            open_url "https://vault.bitwarden.com"
+            gui_message "Bitwarden web vault opened in browser.\n\nWhen ready, click OK to continue with CLI setup."
             if command -v gnome-terminal >/dev/null 2>&1; then
                 gnome-terminal -- bash -c "bw login; echo ''; echo 'To unlock: bw unlock'; echo 'Then export BW_SESSION'; echo ''; echo 'Press Enter to close'; read"
             elif command -v xterm >/dev/null 2>&1; then
@@ -397,7 +418,6 @@ step_bitwarden() {
 
 step_api_keys() {
     echo "=== API Keys Setup ==="
-
     if [[ "$SILENT_MODE" == "true" ]]; then
         echo "Skipping API keys setup (requires interaction)"
         return 0
@@ -406,48 +426,55 @@ step_api_keys() {
     if [[ "$CLI_MODE" == "true" ]]; then
         echo "Claude Code requires an ANTHROPIC_API_KEY to function."
         echo ""
-        echo "Get your API key from: https://console.anthropic.com/settings/keys"
+        echo "Step 1: Opening Anthropic Console to create an API key..."
+        open_url "https://console.anthropic.com/settings/keys"
         echo ""
-        echo "Recommended: Store your API key in Bitwarden and use direnv"
-        echo "to load it per-project with a .envrc file."
+        echo "Step 2: Create a new API key and copy it"
+        echo "Step 3: Paste your API key below (it will be saved to ~/.bashrc)"
         echo ""
-        if cli_confirm "Open API key pages in browser?"; then
-            open_url "https://console.anthropic.com/settings/keys"2>/dev/null || echo "Open: https://console.anthropic.com/settings/keys"
-            open_url "https://platform.openai.com/api-keys" 2>/dev/null || echo "Open: https://platform.openai.com/api-keys"
+        local api_key
+        api_key=$(cli_password "Paste your ANTHROPIC_API_KEY")
+        if [[ -n "$api_key" ]]; then
+            save_api_key "ANTHROPIC_API_KEY" "$api_key"
+            echo "Anthropic API key saved!"
         fi
-
-        if cli_confirm "Create a template .envrc file in your home directory?"; then
-            cat > "$HOME/.envrc.template" << 'ENVRC'
-# API Keys - Copy this to your project directory as .envrc
-# Then run: direnv allow
-
-# Anthropic (Claude)
-export ANTHROPIC_API_KEY="your-anthropic-key-here"
-
-# OpenAI (optional)
-# export OPENAI_API_KEY="your-openai-key-here"
-ENVRC
-            echo "Template created: $HOME/.envrc.template"
-            echo "Copy to project directories and edit with your keys."
+        echo ""
+        if cli_confirm "Also configure OpenAI API key (optional)?"; then
+            echo "Opening OpenAI API keys page..."
+            open_url "https://platform.openai.com/api-keys"
+            echo ""
+            local openai_key
+            openai_key=$(cli_password "Paste your OPENAI_API_KEY (or press Enter to skip)")
+            if [[ -n "$openai_key" ]]; then
+                save_api_key "OPENAI_API_KEY" "$openai_key"
+                echo "OpenAI API key saved!"
+            fi
         fi
+        echo ""
+        echo "API keys saved to ~/.bashrc and ~/.zshrc"
+        echo "Run 'source ~/.bashrc' or start a new terminal to use them."
         update_state "api_keys" true
     else
-        if gui_question "Configure API Keys?\n\nClaude Code requires an ANTHROPIC_API_KEY.\n\nWe'll open the API key pages and create a template .envrc file."; then
-            xdg-open "https://console.anthropic.com/settings/keys" 2>/dev/null || true
-            xdg-open "https://platform.openai.com/api-keys" 2>/dev/null || true
-
-            cat > "$HOME/.envrc.template" << 'ENVRC'
-# API Keys - Copy this to your project directory as .envrc
-# Then run: direnv allow
-
-# Anthropic (Claude)
-export ANTHROPIC_API_KEY="your-anthropic-key-here"
-
-# OpenAI (optional)
-# export OPENAI_API_KEY="your-openai-key-here"
-ENVRC
-
-            gui_message "API key pages opened in browser.\n\nTemplate created: ~/.envrc.template\n\nCopy to project directories and add your keys.\nRun 'direnv allow' to enable."
+        if gui_question "Configure API Keys for Claude Code?\n\nThis will:\n1. Open the Anthropic Console in your browser\n2. Let you paste your API key\n3. Automatically save it to your shell config\n\nNo manual file editing required!"; then
+            gui_message "Step 1: Get your Anthropic API Key\n\nWe're opening the Anthropic Console.\nCreate a new API key and copy it.\n\nClick OK when ready to paste your key."
+            open_url "https://console.anthropic.com/settings/keys"
+            local api_key
+            api_key=$(gui_password "Paste your ANTHROPIC_API_KEY here:")
+            if [[ -n "$api_key" ]]; then
+                save_api_key "ANTHROPIC_API_KEY" "$api_key"
+                gui_message "Anthropic API key saved!\n\nYour key has been added to ~/.bashrc and ~/.zshrc"
+            fi
+            if gui_question "Also configure OpenAI API key?\n\n(Optional - only needed if you use OpenAI services)"; then
+                gui_message "Opening OpenAI API keys page.\n\nCreate a new API key and copy it."
+                open_url "https://platform.openai.com/api-keys"
+                local openai_key
+                openai_key=$(gui_password "Paste your OPENAI_API_KEY here:")
+                if [[ -n "$openai_key" ]]; then
+                    save_api_key "OPENAI_API_KEY" "$openai_key"
+                    gui_message "OpenAI API key saved!"
+                fi
+            fi
+            gui_message "API Keys configured!\n\nYour keys are saved in ~/.bashrc and ~/.zshrc\n\nStart a new terminal or run:\n  source ~/.bashrc"
             update_state "api_keys" true
         fi
     fi
@@ -455,7 +482,6 @@ ENVRC
 
 step_docker_verify() {
     echo "=== Docker Verification ==="
-
     if [[ "$SILENT_MODE" == "true" ]]; then
         if docker run --rm hello-world &>/dev/null; then
             echo "Docker is working!"
@@ -465,7 +491,6 @@ step_docker_verify() {
         fi
         return 0
     fi
-
     if [[ "$CLI_MODE" == "true" ]]; then
         echo "Testing Docker..."
         if docker run --rm hello-world; then
@@ -473,9 +498,7 @@ step_docker_verify() {
             update_state "docker_verify" true
         else
             echo ""
-            echo "Docker test failed. This is usually because group membership"
-            echo "hasn't taken effect yet. Try logging out and back in."
-            echo ""
+            echo "Docker test failed. Try logging out and back in."
             echo "Or run: newgrp docker"
         fi
     else
@@ -484,7 +507,7 @@ step_docker_verify() {
             gui_message "Docker is working correctly!"
             update_state "docker_verify" true
         else
-            gui_message "Docker test failed.\n\nThis usually means you need to log out and back in for group membership to take effect.\n\nAlternatively, run: newgrp docker"
+            gui_message "Docker test failed.\n\nTry logging out and back in.\n\nAlternatively, run: newgrp docker"
         fi
     fi
 }
@@ -493,7 +516,6 @@ show_summary() {
     echo ""
     echo "=== Onboarding Summary ==="
     echo ""
-
     local steps=(
         "git_identity:Git Identity"
         "github_auth:GitHub Auth"
@@ -503,7 +525,6 @@ show_summary() {
         "api_keys:API Keys"
         "docker_verify:Docker"
     )
-
     for step_info in "${steps[@]}"; do
         local key="${step_info%%:*}"
         local label="${step_info#*:}"
@@ -515,7 +536,6 @@ show_summary() {
             echo "  [ ] $label"
         fi
     done
-
     echo ""
 }
 
@@ -524,11 +544,9 @@ main() {
     echo "  DevVM Onboarding Wizard"
     echo "========================================"
     echo ""
-
     if [[ "$CLI_MODE" == "false" ]]; then
         gui_message "Welcome to DevVM Onboarding!\n\nThis wizard will help you configure your development environment.\n\nEach step can be skipped and run later."
     fi
-
     step_git_identity
     step_github_auth
     step_ssh_setup
@@ -536,11 +554,8 @@ main() {
     step_bitwarden
     step_api_keys
     step_docker_verify
-
     mark_complete
-
     show_summary
-
     if [[ "$CLI_MODE" == "true" ]]; then
         echo "Onboarding complete!"
         echo "You can re-run any step by running: devvm-onboarding --cli"
