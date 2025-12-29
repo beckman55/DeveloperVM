@@ -369,15 +369,35 @@ autoinstall:
           retries=$(increment_retries)
           log "Retry count: $retries/$MAX_RETRIES"
 
-          # Wait for network
+          # Wait for network with DHCP fallback
           log "Waiting for network..."
           local net_wait=0
+          local dhcp_requested=false
+          
           while ! ping -c 1 archive.ubuntu.com >/dev/null 2>&1; do
               if [[ $net_wait -ge 120 ]]; then
                   log "ERROR: Network not available after 120s"
                   update_state "error" "provisioning" "Network timeout"
                   exit 1
               fi
+              
+              # Every 15 seconds, check if we have an IP and try DHCP if not
+              if [[ $((net_wait % 15)) -eq 0 ]] && [[ $net_wait -gt 0 ]]; then
+                  # Check if any interface has an IP (excluding loopback)
+                  if ! ip -4 addr show | grep -v '127.0.0.1' | grep -q 'inet '; then
+                      log "No IP address detected, requesting DHCP..."
+                      # Try NetworkManager first
+                      nmcli networking off 2>/dev/null || true
+                      sleep 2
+                      nmcli networking on 2>/dev/null || true
+                      # Also try dhclient as fallback
+                      for iface in $(ip link show | grep -E '^[0-9]+: (eth|ens|enp)' | cut -d: -f2 | tr -d ' '); do
+                          dhclient -v "$iface" 2>/dev/null &
+                      done
+                      dhcp_requested=true
+                  fi
+              fi
+              
               sleep 5
               net_wait=$((net_wait + 5))
           done
@@ -471,6 +491,12 @@ autoinstall:
       [Install]
       WantedBy=multi-user.target
       SERVICEEOF
+
+    # Fix network wait timeout - we use NetworkManager, not systemd-networkd
+    - curtin in-target -- systemctl mask systemd-networkd-wait-online.service
+
+    # Fix SSSD socket dependency errors (SSSD not installed)
+    - curtin in-target -- systemctl mask sssd-nss.socket sssd-autofs.socket sssd-pac.socket sssd-pam.socket sssd-pam-priv.socket sssd-ssh.socket sssd-sudo.socket
 
     # Enable the provisioning service
     - curtin in-target -- systemctl enable devvm-provision.service

@@ -49,3 +49,25 @@
     name: yad
     state: present
   ignore_errors: true
+
+# Fix network wait timeout - we use NetworkManager, not systemd-networkd
+- name: Mask systemd-networkd-wait-online service
+  ansible.builtin.systemd:
+    name: systemd-networkd-wait-online.service
+    masked: true
+  ignore_errors: true
+
+# Fix SSSD socket dependency errors (SSSD not installed)
+- name: Mask unused SSSD sockets
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+  loop:
+    - sssd-nss.socket
+    - sssd-autofs.socket
+    - sssd-pac.socket
+    - sssd-pam.socket
+    - sssd-pam-priv.socket
+    - sssd-ssh.socket
+    - sssd-sudo.socket
+  ignore_errors: true
