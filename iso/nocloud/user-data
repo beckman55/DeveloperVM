@@ -15,7 +15,7 @@ autoinstall:
     hostname: developervm
     username: developer
     # Password: "developer" - hashed with mkpasswd
-    password: "$6$rounds=4096$randomsalt$KQH7QK8X5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E"
+    password: "$6$CDOr64H9w0wIN.v9$KZqwKUZL0mA/tS8PXz7knWHHjpO72FNcSTv4.QscPp3Ih.Dnph0VG7GNNezf4g267LVZTCVeUs6mHAQJll.6g."
 
   # Storage - use entire disk
   storage:

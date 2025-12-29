@@ -1,6 +1,15 @@
 ---
 # VS Code installation role (official Microsoft repo, NOT snap)
 
+- name: Remove conflicting VS Code sources (prevent Signed-By conflicts)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/vscode.sources
+    - /usr/share/keyrings/microsoft.gpg
+  ignore_errors: true
+
 - name: Create keyrings directory
   ansible.builtin.file:
     path: /etc/apt/keyrings
@@ -27,6 +36,10 @@
 
 - name: Verify VS Code installation
   ansible.builtin.command: code --version
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
   register: vscode_version
   changed_when: false
 
