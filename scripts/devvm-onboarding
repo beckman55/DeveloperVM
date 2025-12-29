@@ -88,7 +88,17 @@ if [[ "$CLI_MODE" == "false" ]]; then
         CLI_MODE=true
     fi
 fi
-
+  # Open URL in browser with fallback (fixes xdg-open issues)
+  open_url() {
+      local url="$1"
+      xdg-open "$url" 2>/dev/null && return 0
+      if command -v firefox >/dev/null 2>&1; then
+          firefox "$url" 2>/dev/null &
+          return 0
+      fi
+      echo "Please open manually: $url"
+      return 1
+  }
 # GUI helpers
 gui_message() {
     local msg="$1"
@@ -214,7 +224,7 @@ step_github_auth() {
         echo "Skipping GitHub auth (requires interaction)"
         return 0
     fi
-
+echo "TIP: Select SSH when prompted for the preferred protocol"
     if gh auth status &>/dev/null; then
         local user
         user=$(gh api user --jq '.login' 2>/dev/null || echo "unknown")
@@ -237,7 +247,7 @@ step_github_auth() {
             echo "Skipped GitHub authentication"
         fi
     else
-        if gui_question "Authenticate with GitHub?\n\nThis will open a browser for device authentication."; then
+        if gui_question "Authenticate with GitHub?\n\nThis will open a browser for device authentication.\n\nTIP: Select SSH when prompted."; then
             if command -v gnome-terminal >/dev/null 2>&1; then
                 gnome-terminal -- bash -c "gh auth login --web; echo 'Press Enter to close'; read"
             elif command -v xterm >/dev/null 2>&1; then
@@ -402,8 +412,8 @@ step_api_keys() {
         echo "to load it per-project with a .envrc file."
         echo ""
         if cli_confirm "Open API key pages in browser?"; then
-            xdg-open "https://console.anthropic.com/settings/keys" 2>/dev/null || echo "Open: https://console.anthropic.com/settings/keys"
-            xdg-open "https://platform.openai.com/api-keys" 2>/dev/null || echo "Open: https://platform.openai.com/api-keys"
+            open_url "https://console.anthropic.com/settings/keys"2>/dev/null || echo "Open: https://console.anthropic.com/settings/keys"
+            open_url "https://platform.openai.com/api-keys" 2>/dev/null || echo "Open: https://platform.openai.com/api-keys"
         fi
 
         if cli_confirm "Create a template .envrc file in your home directory?"; then

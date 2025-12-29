@@ -87,3 +87,31 @@
     HOME: "{{ dev_user_home }}"
   failed_when: false
   changed_when: false
+
+# Fix xdg-open to use Firefox for URLs (prevents LibreOffice from opening URLs)
+- name: Set Firefox as default browser for http
+  ansible.builtin.command: xdg-mime default firefox.desktop x-scheme-handler/http
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+  changed_when: false
+  failed_when: false
+
+- name: Set Firefox as default browser for https
+  ansible.builtin.command: xdg-mime default firefox.desktop x-scheme-handler/https
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+  changed_when: false
+  failed_when: false
+
+- name: Set Firefox as default web browser
+  ansible.builtin.command: xdg-settings set default-web-browser firefox.desktop
+  become: true
+  become_user: "{{ dev_username }}"
+  environment:
+    HOME: "{{ dev_user_home }}"
+  changed_when: false
+  failed_when: false
