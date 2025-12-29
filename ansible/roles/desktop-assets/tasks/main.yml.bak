@@ -88,7 +88,7 @@
   failed_when: false
   changed_when: false
 
-# Fix xdg-open to use Firefox for URLs
+# Fix xdg-open to use Firefox for URLs (prevents LibreOffice from opening URLs)
 - name: Set Firefox as default browser for http
   ansible.builtin.command: xdg-mime default firefox.desktop x-scheme-handler/http
   become: true
@@ -115,75 +115,3 @@
     HOME: "{{ dev_user_home }}"
   changed_when: false
   failed_when: false
-
-# Dark theme and wallpaper configuration for Cinnamon
-- name: Ensure dconf directory exists for dev user
-  ansible.builtin.file:
-    path: "{{ dev_user_home }}/.config/dconf"
-    state: directory
-    mode: '0755'
-    owner: "{{ dev_username }}"
-    group: "{{ dev_username }}"
-
-- name: Copy DevVM wallpaper
-  ansible.builtin.copy:
-    src: devvm-wallpaper.png
-    dest: /usr/share/backgrounds/devvm-wallpaper.png
-    mode: '0644'
-
-- name: Set dark theme and wallpaper via dconf
-  ansible.builtin.shell: |
-    dconf write /org/cinnamon/theme/name "'Mint-Y-Dark'"
-    dconf write /org/cinnamon/desktop/interface/gtk-theme "'Mint-Y-Dark'"
-    dconf write /org/cinnamon/desktop/interface/icon-theme "'Mint-Y-Dark'"
-    dconf write /org/cinnamon/desktop/wm/preferences/theme "'Mint-Y-Dark'"
-    dconf write /org/cinnamon/desktop/background/picture-uri "'file:///usr/share/backgrounds/devvm-wallpaper.png'"
-    dconf write /org/cinnamon/desktop/background/picture-options "'zoom'"
-    dconf write /org/cinnamon/desktop/background/primary-color "'#1a1a2e'"
-  become: true
-  become_user: "{{ dev_username }}"
-  environment:
-    HOME: "{{ dev_user_home }}"
-    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ dev_user_uid }}/bus"
-  changed_when: false
-  failed_when: false
-
-- name: Ensure gtk-3.0 config directory exists
-  ansible.builtin.file:
-    path: "{{ dev_user_home }}/.config/gtk-3.0"
-    state: directory
-    mode: '0755'
-    owner: "{{ dev_username }}"
-    group: "{{ dev_username }}"
-
-- name: Set GTK3 dark theme preference
-  ansible.builtin.copy:
-    content: |
-      [Settings]
-      gtk-application-prefer-dark-theme=1
-      gtk-theme-name=Mint-Y-Dark
-      gtk-icon-theme-name=Mint-Y-Dark
-    dest: "{{ dev_user_home }}/.config/gtk-3.0/settings.ini"
-    mode: '0644'
-    owner: "{{ dev_username }}"
-    group: "{{ dev_username }}"
-
-- name: Ensure gtk-4.0 config directory exists
-  ansible.builtin.file:
-    path: "{{ dev_user_home }}/.config/gtk-4.0"
-    state: directory
-    mode: '0755'
-    owner: "{{ dev_username }}"
-    group: "{{ dev_username }}"
-
-- name: Set GTK4 dark theme preference
-  ansible.builtin.copy:
-    content: |
-      [Settings]
-      gtk-application-prefer-dark-theme=1
-      gtk-theme-name=Mint-Y-Dark
-      gtk-icon-theme-name=Mint-Y-Dark
-    dest: "{{ dev_user_home }}/.config/gtk-4.0/settings.ini"
-    mode: '0644'
-    owner: "{{ dev_username }}"
-    group: "{{ dev_username }}"
